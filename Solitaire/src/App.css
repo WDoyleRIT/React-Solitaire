@@ -11,6 +11,32 @@ body {
 header{
   background-color: #313131;
   height: 10vh;
+  color: white;
+  display: flex;
+  align-items: center;
+}
+
+/* Align the .menu contents to the right side of the header */
+.menu{
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
+/* Force-size icons when the SVG has the `closer` class */
+svg.settings,
+.lucide.settings {
+  position: relative;
+  margin-right: 1.5rem;
+  width: 3rem !important;
+  height: 3rem !important;
+  display: inline-block;
+}
+
+.menu{
+  display: flex;
+  flex-direction: row;
+
 }
 
 #game{
@@ -32,6 +58,22 @@ nav{
   width: 10vw;
 }
 
+#nav1{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#nav2{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-around;
+  padding-top: none;
+  margin-top: none;
+}
+
 .playingCard{
   margin-top: 1rem;
   height: 18vh;
@@ -44,6 +86,37 @@ nav{
   padding: 0;
   display: flex;
   flex-direction: column;
+}
+
+#discardDeck{
+  margin-bottom: 1rem;
+}
+
+.cardPile{
+  height: 18vh;
+}
+
+.playingDeck{
+  margin-top: 1rem;
+  height: 18vh;
+}
+
+.shop{
+  margin-top: -5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.shopCard{
+  height: 18vh;
+  margin-bottom: -6rem;
+}
+
+/* container keeping deck and shop stacked */
+.deckGroup{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 @media (max-width: 600px){
