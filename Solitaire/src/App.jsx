@@ -1,11 +1,12 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, memo } from "react";
 import cardBack from "./assets/cards/card_back.png";
 import heart from "./assets/cards/Hearts.png";
 import diamond from "./assets/cards/Diamonds.png";
 import club from "./assets/cards/Clubs.png";
 import spade from "./assets/cards/Spades.png";
 import refresh from "./assets/cards/Refresh.png";
-import { X, Volume2, VolumeOff } from "lucide-react";
+import { X, Volume2, VolumeOff, Undo, Star } from "lucide-react";
+import "@fontsource-variable/archivo/wght.css";
 import "./App.css";
 
 // Initially, deck is sorted by suit alphabetically, and then by rank from lowest (Ace) to highest (King)
@@ -379,33 +380,62 @@ const deck = [
   },
 ];
 
+
+// Precompute absolute image URLs once so renders don't call `new URL(...)` repeatedly.
+deck.forEach((c) => {
+  if (c && c.img) c.img = new URL(c.img, import.meta.url).href;
+});
+
 function App() {
   const [volumeOn, setVolumeOn] = useState(true);
   const [moves, setMoves] = useState(0);
+  const [score, setScore] = useState(0);
   const [shopCards, setShopCards] = useState([]);
   const [discards, setDiscards] = useState([]);
+  // Track deck size in state so the UI updates when module-level `deck` is mutated.
+  const [deckCount, setDeckCount] = useState(deck.length);
+  const [currentTime, setCurrentTime] = useState(Date.now());
+  // Keep the start time in a ref so it doesn't reset on each render
+  const startTimeRef = useRef(Date.now());
+  // Ref that holds the currently dragged/pressed card (no rerenders)
+  const draggingRef = useRef(null);
 
+  // For debugging deck manipulation
   /*useEffect(() => {
-  console.log("Cards in deck: " + deck.length ," Cards in discard: " + discards.length);
+    console.log(
+      "Cards in deck: " + deck.length,
+      " Cards in discard: " + discards.length,
+    );
   }, [deck, discards]);*/
 
-  const toggleVolume = () => setVolumeOn((v) => !v);
+  // Stable handler for toggling audio UI
+  const toggleVolume = useCallback(() => setVolumeOn((v) => !v), []);
 
-  const checkDeck = () => {
-    //To do: on click, take top three cards from deck and display them in shop
-    //If there are already cards in the shop, first place them in discard
-    //If there are no cards in the deck, place cards in shop in discard, then
-    // return discarded cards to deck
-    const shop = document.querySelector(".shop");
+  // Draw cards from the module-level deck into the shop.
+  // Using useCallback reduces handler identity changes.
+  const checkDeck = useCallback(() => {
     let newShopCards = [];
 
-    if(deck.length === 0){
+    // If the module-level deck is empty, recycle discarded/shop cards back
+    // onto the deck and then attempt to draw. If recycling still leaves the
+    // deck empty, bail out. When we recycle we should NOT also move the
+    // current `shopCards` into `discards` because `Recycle` already handles
+    // returning those shop cards to the deck.
+    let recycled = false;
+    if (deck.length === 0) {
       Recycle();
-      return;
+      recycled = true;
+      if (deck.length === 0) return;
     }
 
-    if (shopCards.length !== 0) {
+    if (!recycled && shopCards.length !== 0) {
       // Move existing shop cards into the discard pile
+      console.debug("checkDeck: moving shop -> discards", {
+        shopLen: shopCards.length,
+        shopIds: shopCards.map((c) => c && c.id),
+        discardsLen: discards.length,
+        discardsIds: discards.map((d) => d && d.id),
+      });
       setDiscards((prev) => [...prev, ...shopCards]);
     }
 
@@ -416,30 +446,86 @@ function App() {
 
     // update React state so the shop images re-render
     setShopCards(newShopCards);
-  };
+    // update the deck count shown in the UI
+    setDeckCount(deck.length);
+  }, [shopCards, setShopCards, setDiscards]);
+
+  // After initial render (which mounts `Stack` children that draw from the
+  // module-level `deck`), sync the React-visible `deckCount` with the actual
+  // module-level deck length so the UI reflects the true number of cards.
+  useEffect(() => {
+    setDeckCount(deck.length);
+  }, []);
 
   // Once the deck is emptied, move all cards in the navbar back to the deck
-  const Recycle = () => {
-    // Combine current discards and any cards still in the shop
+  const Recycle = useCallback(() => {
+    // Combine the current discard pile with any cards still shown in the shop.
+    console.debug("Recycle: start", {
+      deckBefore: deck.length,
+      discardsLen: discards.length,
+      discardsIds: discards.map((d) => d && d.id),
+      shopLen: shopCards.length,
+      shopIds: shopCards.map((c) => c && c.id),
+    });
+
     const newDiscards = [...discards, ...shopCards];
 
-    // Clear the shop (do not mutate state arrays directly)
+    if (newDiscards.length === 0) return; // nothing to recycle
+
+    // Clear the shop so UI shows empty immediately
     setShopCards([]);
 
-    // Push all discarded cards back onto the deck. Push in reverse
-    // so the previous top-of-discard ends up on top of the deck.
+    // Push all discarded/shop cards back onto the deck in reverse order so
+    // the previous top-of-discard ends up on top of the deck.
     for (let i = newDiscards.length - 1; i >= 0; i--) {
       deck.push(newDiscards[i]);
     }
 
-    // Clear discard state
+    // Clear discard state and sync deckCount
     setDiscards([]);
-  }
+    setDeckCount(deck.length);
+
+    console.debug("Recycle: done", { deckAfter: deck.length });
+  }, [discards, shopCards]);
+
+  // (No-op) state-backed Recycle avoids needing separate refs.
+
+  // Update `currentTime` on an interval; this is done in an effect below
+  useEffect(() => {
+    const id = setInterval(() => setCurrentTime(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const totalSeconds = Math.floor((currentTime - startTimeRef.current) / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  // Called by Card when pointer is pressed on it. Store card + DOM element in a ref.
+  const handleStartDrag = useCallback((card, el) => {
+    draggingRef.current = { id: card.id, card, el, startedAt: Date.now() };
+  }, []);
+
+  // Called by Card when pointer is released/cancelled.
+  const handleEndDrag = useCallback(() => {
+    draggingRef.current = null;
+  }, []);
+
+  useEffect(() => {
+  onStart();
+  }, []); // runs after first mount
 
   return (
     <>
       <header>
-        <div className="stats"></div>
+        <div className="stats">
+          <h1 className="timer">
+            {hours}:{String(minutes).padStart(2, "0")}:
+            {String(seconds).padStart(2, "0")}
+          </h1>
+          <h1 className="scoreCount">Score {score}</h1>
+          <h1 className="moveCount">Moves {moves} </h1>
+        </div>
         <div className="menu">
           {volumeOn ? (
             <Volume2 className="settings" onClick={toggleVolume} />
@@ -453,34 +539,31 @@ function App() {
         <nav id="nav1">
           <img
             className="playingDeck"
-            src={deck.length > 0 ? cardBack : refresh}
-            onClick={() => checkDeck()}
+            src={deckCount > 0 ? cardBack : refresh}
+            onClick={checkDeck}
           />
           <div className="shop">
-            <img
-              className="shopCard"
-              src={
-                shopCards[0]
-                  ? new URL(shopCards[0].img, import.meta.url).href
-                  : null
-              }
-            />
-            <img
-              className="shopCard"
-              src={
-                shopCards[1]
-                  ? new URL(shopCards[1].img, import.meta.url).href
-                  : null
-              }
-            />
-            <img
-              className="shopCard"
-              src={
-                shopCards[2]
-                  ? new URL(shopCards[2].img, import.meta.url).href
-                  : null
-              }
-            />
+            {shopCards[0] && (
+              <img
+                className="shopCard"
+                src={shopCards[0].img}
+                alt="shop card 1"
+              />
+            )}
+            {shopCards[1] && (
+              <img
+                className="shopCard"
+                src={shopCards[1].img}
+                alt="shop card 2"
+              />
+            )}
+            {shopCards[2] && (
+              <img
+                className="shopCard"
+                src={shopCards[2].img}
+                alt="shop card 3"
+              />
+            )}
           </div>
           <img
             id="discardDeck"
@@ -489,13 +572,26 @@ function App() {
           />
         </nav>
         <main>
-          <Stack cards={1} />
-          <Stack cards={2} />
-          <Stack cards={3} />
-          <Stack cards={4} />
-          <Stack cards={5} />
-          <Stack cards={6} />
-          <Stack cards={7} />
+          <div className="stacks">
+            <Stack cards={1} onStartDrag={handleStartDrag} onEndDrag={handleEndDrag} />
+            <Stack cards={2} onStartDrag={handleStartDrag} onEndDrag={handleEndDrag} />
+            <Stack cards={3} onStartDrag={handleStartDrag} onEndDrag={handleEndDrag} />
+            <Stack cards={4} onStartDrag={handleStartDrag} onEndDrag={handleEndDrag} />
+            <Stack cards={5} onStartDrag={handleStartDrag} onEndDrag={handleEndDrag} />
+            <Stack cards={6} onStartDrag={handleStartDrag} onEndDrag={handleEndDrag} />
+            <Stack cards={7} onStartDrag={handleStartDrag} onEndDrag={handleEndDrag} />
+          </div>
+
+          <div className="footer">
+            <h1 className="undoButton" onClick={undoAction}>
+              <Undo className="footerIcon" />
+              Undo
+            </h1>
+            <h1 className="newButton" onClick={newGame}>
+              <Star className="footerIcon" />
+              New
+            </h1>
+          </div>
         </main>
         <nav id="nav2">
           <Pile suit="Heart" />
@@ -508,7 +604,7 @@ function App() {
   );
 }
 
-function Stack({ cards }) {
+const Stack = memo(function Stack({ cards, onStartDrag, onEndDrag }) {
   const [currentStack] = useState(() => {
     const s = [];
     for (let i = 0; i < cards; i++) {
@@ -516,7 +612,9 @@ function Stack({ cards }) {
     }
     return s;
   });
-  // Ensure only the last card in the stack is face up
+
+  // Ensure only the last card in the stack is face up. We mutate the
+  // card objects once at initialization; after that the stack is stable.
   if (currentStack.length > 0) {
     currentStack.forEach((c) => {
       if (c) c.faceUp = false;
@@ -524,36 +622,133 @@ function Stack({ cards }) {
     const last = currentStack[currentStack.length - 1];
     if (last) last.faceUp = true;
   }
+
   return (
     <ul className="cardStack">
       {currentStack.map((card) => (
         <li key={card.id}>
-          <Card data={card} />
+          <Card data={card} onStartDrag={onStartDrag} onEndDrag={onEndDrag} />
         </li>
       ))}
     </ul>
   );
-}
+});
 
-function Card({ data }) {
-  const [isFaceUp, setIsFaceUp] = useState(Boolean(data && data.faceUp));
-  const src =
-    isFaceUp && data && data.img
-      ? new URL(data.img, import.meta.url).href
-      : cardBack;
+const Card = memo(function Card({ data, onStartDrag, onEndDrag }) {
+  // Derive face-up from the passed `data` rather than keeping local state.
+  const isFaceUp = Boolean(data && data.faceUp);
+  // Use precomputed image href (set earlier) to avoid recomputing on each render
+  const src = isFaceUp && data && data.img ? data.img : cardBack;
+  const [isPressed, setIsPressed] = useState(false);
+  const elRef = useRef(null);
+  const dragStateRef = useRef(null);
+
+  function onPointerDown(e) {
+    e.preventDefault();
+    const el = elRef.current;
+    el?.setPointerCapture?.(e.pointerId);
+    setIsPressed(true);
+    try { onStartDrag?.(data, el); } catch (err) {}
+
+    // Prepare element for fixed-position dragging visuals
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    el.style.width = `${rect.width}px`;
+    el.style.height = `${rect.height}px`;
+    el.style.left = `${rect.left}px`;
+    el.style.top = `${rect.top}px`;
+    el.style.margin = "0";
+    el.style.position = "fixed";
+    el.style.pointerEvents = "none";
+    el.style.zIndex = "9999";
+
+    const dragState = {
+      el,
+      offsetX: e.clientX - rect.left,
+      offsetY: e.clientY - rect.top,
+      baseLeft: rect.left,
+      baseTop: rect.top,
+      lastX: e.clientX,
+      lastY: e.clientY,
+      rafId: null,
+    };
+
+    const rafLoop = () => {
+      const d = dragStateRef.current;
+      if (!d) return;
+      const tx = d.lastX - d.offsetX - d.baseLeft;
+      const ty = d.lastY - d.offsetY - d.baseTop;
+      d.el.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
+      d.rafId = requestAnimationFrame(rafLoop);
+    };
+
+    // store in ref so move handler can update coordinates
+    dragStateRef.current = dragState;
+    dragStateRef.current.rafId = requestAnimationFrame(rafLoop);
+
+    const onPointerMove = (ev) => {
+      if (dragStateRef.current) {
+        dragStateRef.current.lastX = ev.clientX;
+        dragStateRef.current.lastY = ev.clientY;
+      }
+    };
+
+    const onPointerUpGlobal = (ev) => {
+      try { el.releasePointerCapture?.(ev.pointerId); } catch (err) {}
+      // stop rAF
+      const d = dragStateRef.current;
+      if (d) {
+        if (d.rafId) cancelAnimationFrame(d.rafId);
+        // reset styles
+        d.el.style.transform = "";
+        d.el.style.left = "";
+        d.el.style.top = "";
+        d.el.style.width = "";
+        d.el.style.height = "";
+        d.el.style.margin = "";
+        d.el.style.position = "";
+        d.el.style.pointerEvents = "";
+        d.el.style.zIndex = "";
+      }
+      dragStateRef.current = null;
+      setIsPressed(false);
+      try { onEndDrag?.(); } catch (err) {}
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUpGlobal);
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUpGlobal);
+  }
+
+  function onPointerUp(e) {
+    // Handled by global pointerup listener set in onPointerDown; keep for safety
+    try { elRef.current?.releasePointerCapture?.(e.pointerId); } catch (err) {}
+    setIsPressed(false);
+    try { onEndDrag?.(); } catch (err) {}
+  }
+
+  function onPointerCancel() {
+    setIsPressed(false);
+    try { onEndDrag?.(); } catch (err) {}
+  }
 
   return (
     <img
-      className="playingCard"
+      ref={elRef}
+      className={`${isPressed ? "clickedCard" : "playingCard"}`}
       src={src}
       alt={data ? `${data.rank} of ${data.suit}` : "Card"}
+      onPointerDown={onPointerDown}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
+      draggable={false}
     />
   );
-}
+});
 
-function Pile({ suit }) {
-  const [value, setValue] = useState(0);
-
+const Pile = memo(function Pile({ suit }) {
+  // No local state required here; derive the image directly.
   let img = cardBack; // fallback
   switch (suit) {
     case "Heart":
@@ -571,7 +766,7 @@ function Pile({ suit }) {
   }
 
   return <img className="cardPile" src={img} alt={"Stack"} />;
-}
+});
 
 // Fisher-Yates shuffle (Unbiased permutation, making every ordering equally likely)
 function shuffleDeck() {
@@ -604,6 +799,18 @@ function drawCard() {
 function closeWindow() {
   window.open("", "_self", "");
   window.close();
+}
+
+function undoAction() {
+  console.log("to do!");
+}
+
+function newGame() {
+  window.location.reload();
+}
+
+function onStart(){
+  console.log("Started!");
 }
 
 export default App;
