@@ -418,17 +418,13 @@ function App() {
 
     // If the module-level deck is empty, recycle discarded/shop cards back
     // onto the deck and then attempt to draw. If recycling still leaves the
-    // deck empty, bail out. When we recycle we should NOT also move the
-    // current `shopCards` into `discards` because `Recycle` already handles
-    // returning those shop cards to the deck.
-    let recycled = false;
+    // deck empty, bail out.
     if (deck.length === 0) {
       Recycle();
-      recycled = true;
       if (deck.length === 0) return;
     }
 
-    if (!recycled && shopCards.length !== 0) {
+    if (shopCards.length !== 0) {
       // Move existing shop cards into the discard pile
       console.debug("checkDeck: moving shop -> discards", {
         shopLen: shopCards.length,
